@@ -35,89 +35,89 @@
 // error handling
 //
 void diep(char *str) {
-	fprintf(stderr, "[-] %s: [%d] %s\n", str, errno, strerror(errno));
-	exit(EXIT_FAILURE);
+    fprintf(stderr, "[-] %s: [%d] %s\n", str, errno, strerror(errno));
+    exit(EXIT_FAILURE);
 }
 
 void dier(char *str) {
-	fprintf(stderr, "[-] %s\n", str);
-	exit(EXIT_FAILURE);
+    fprintf(stderr, "[-] %s\n", str);
+    exit(EXIT_FAILURE);
 }
 
 //
 // device setter
 //
 int set_interface_attribs(int fd, int speed) {
-	struct termios tty;
+    struct termios tty;
 
-	memset(&tty, 0, sizeof(tty));
+    memset(&tty, 0, sizeof(tty));
 
-	if(tcgetattr(fd, &tty) != 0)
-		diep("tcgetattr");
+    if(tcgetattr(fd, &tty) != 0)
+        diep("tcgetattr");
 
-	tty.c_cflag = speed | CRTSCTS | CS8 | CLOCAL | CREAD;
+    tty.c_cflag = speed | CRTSCTS | CS8 | CLOCAL | CREAD;
 
-	tty.c_iflag  = IGNPAR | ICRNL;
-	tty.c_lflag  = ICANON;
-	tty.c_oflag  = 0;
-	tty.c_cc[VMIN]  = 1;
-	tty.c_cc[VTIME] = 0;
+    tty.c_iflag  = IGNPAR | ICRNL;
+    tty.c_lflag  = ICANON;
+    tty.c_oflag  = 0;
+    tty.c_cc[VMIN]  = 1;
+    tty.c_cc[VTIME] = 0;
 
-	if(tcsetattr(fd, TCSANOW, &tty) != 0)
-		diep("tcgetattr");
+    if(tcsetattr(fd, TCSANOW, &tty) != 0)
+        diep("tcgetattr");
 
-	return 0;
+    return 0;
 }
 
 //
 // device i/o
 //
 char *readfd(int fd, char *buffer, size_t length) {
-	int res, saved = 0;
-	fd_set readfs;
-	int selval;
-	struct timeval tv, *ptv;
-	char *temp;
+    int res, saved = 0;
+    fd_set readfs;
+    int selval;
+    struct timeval tv, *ptv;
+    char *temp;
 
-	FD_ZERO(&readfs);
+    FD_ZERO(&readfs);
 
-	while(1) {
-		FD_SET(fd, &readfs);
+    while(1) {
+        FD_SET(fd, &readfs);
 
-		tv.tv_sec  = 2;
-		tv.tv_usec = 0;
+        tv.tv_sec  = 2;
+        tv.tv_usec = 0;
 
         ptv = NULL; // ptv = &tv;
 
-		if((selval = select(fd + 1, &readfs, NULL, NULL, ptv)) < 0)
-			diep("select");
+        if((selval = select(fd + 1, &readfs, NULL, NULL, ptv)) < 0)
+            diep("select");
 
-		if(FD_ISSET(fd, &readfs)) {
-			if((res = read(fd, buffer + saved, length - saved)) < 0)
-				diep("fd read");
+        if(FD_ISSET(fd, &readfs)) {
+            if((res = read(fd, buffer + saved, length - saved)) < 0)
+                diep("fd read");
 
-			buffer[res + saved] = '\0';
+            buffer[res + saved] = '\0';
 
-			// line/block is maybe not completed, waiting for a full line/block
-			if(buffer[res + saved - 1] != '\n') {
-				saved = res;
-				continue;
-			}
+            // line/block is maybe not completed, waiting for a full line/block
+            if(buffer[res + saved - 1] != '\n') {
+                saved = res;
+                continue;
+            }
 
-			buffer[res + saved - 1] = '\0';
+            buffer[res + saved - 1] = '\0';
 
-			for(temp = buffer; *temp == '\n'; temp++);
-			memmove(buffer, temp, strlen(temp));
+            for(temp = buffer; *temp == '\n'; temp++);
+            memmove(buffer, temp, strlen(temp));
 
-			if(!*buffer)
-				continue;
+            if(!*buffer)
+                continue;
 
-			printf("[+] >> %s\n", buffer);
+            printf("[+] >> %s\n", buffer);
+            fflush(stdout);
+        }
 
-		}
-
-		return buffer;
-	}
+        return buffer;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -126,9 +126,9 @@ int main(int argc, char *argv[]) {
     char buffer[2048];
 
     if((fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0)
-		diep(device);
+        diep(device);
 
-	set_interface_attribs(fd, B9600);
+    set_interface_attribs(fd, B9600);
 
     while(1) {
         readfd(fd, buffer, sizeof(buffer));
