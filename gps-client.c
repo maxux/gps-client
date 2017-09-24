@@ -22,8 +22,13 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <inttypes.h>
@@ -42,6 +47,11 @@ void diep(char *str) {
 void dier(char *str) {
     fprintf(stderr, "[-] %s\n", str);
     exit(EXIT_FAILURE);
+}
+
+int errp(char *str) {
+    perror(str);
+    return -1;
 }
 
 //
@@ -70,13 +80,13 @@ int set_interface_attribs(int fd, int speed) {
 }
 
 //
-// device i/o
+// device io
 //
 char *readfd(int fd, char *buffer, size_t length) {
     int res, saved = 0;
     fd_set readfs;
     int selval;
-    struct timeval tv, *ptv;
+    // struct timeval tv, *ptv;
     char *temp;
 
     FD_ZERO(&readfs);
@@ -84,12 +94,12 @@ char *readfd(int fd, char *buffer, size_t length) {
     while(1) {
         FD_SET(fd, &readfs);
 
-        tv.tv_sec  = 2;
-        tv.tv_usec = 0;
+        // tv.tv_sec  = 2;
+        // tv.tv_usec = 0;
 
-        ptv = NULL; // ptv = &tv;
+        // ptv = NULL; // ptv = &tv;
 
-        if((selval = select(fd + 1, &readfs, NULL, NULL, ptv)) < 0)
+        if((selval = select(fd + 1, &readfs, NULL, NULL, NULL)) < 0)
             diep("select");
 
         if(FD_ISSET(fd, &readfs)) {
@@ -120,18 +130,132 @@ char *readfd(int fd, char *buffer, size_t length) {
     }
 }
 
-int main(int argc, char *argv[]) {
+//
+// network io
+//
+int net_connect(char *host, int port) {
+	int sockfd;
+	struct sockaddr_in addr_remote;
+	struct hostent *hent;
+
+	/* create client socket */
+	addr_remote.sin_family = AF_INET;
+	addr_remote.sin_port = htons(port);
+
+	/* dns resolution */
+	if((hent = gethostbyname(host)) == NULL)
+		return errp("[-] gethostbyname");
+
+	memcpy(&addr_remote.sin_addr, hent->h_addr_list[0], hent->h_length);
+
+	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+		return errp("[-] socket");
+
+	/* connecting */
+	if(connect(sockfd, (const struct sockaddr *) &addr_remote, sizeof(addr_remote)) < 0)
+		return errp("[-] connect");
+
+	return sockfd;
+}
+
+//
+// network request
+//
+char *http(char *endpoint) {
+    char *server = "home.maxux.net";
+    int port = 5555;
+
+    char header[2048];
+    char buffer[256];
+    int sockfd;
+    int length;
+
+    sprintf(header, "GET %s\r\n\r\n", endpoint);
+
+    if((sockfd = net_connect(server, port)) < 0)
+        return NULL;
+
+    if(send(sockfd, header, strlen(header), 0) < 0) {
+        perror("[-] send");
+        return NULL;
+    }
+
+    if((length = recv(sockfd, buffer, sizeof(buffer), 0)) < 0)
+        perror("[-] read");
+
+    buffer[length] = '\0';
+    printf("[+] buffer: %s\n", buffer);
+
+    return strdup(buffer);
+}
+
+//
+// local logs
+//
+int logs_create() {
     int fd;
+    char filename[256];
+
+    sprintf(filename, "/mnt/backlog/gps-%lu", time(NULL));
+    if((fd = open(filename, O_WRONLY | O_CREAT, 0644)) < 0)
+        return errp(filename);
+
+    return fd;
+}
+
+void logs_append(int fd, char *line) {
+    if(write(fd, line, strlen(line)) < 0)
+        perror("[-] logs write");
+}
+
+//
+// main worker
+//
+int main(void) {
+    int fd, logsfd;
     char *device = "/dev/ttyAMA0";
     char buffer[2048];
+    char *response = NULL;
+    char request[1024];
 
+    if((logsfd = logs_create() < 0))
+        diep("[-] logs");
+
+    // connecting to the network
+    while(!(response = http("/api/ping"))) {
+        printf("[-] could not reach endpoint, waiting\n");
+        usleep(1000000);
+    }
+
+    if(strncmp("{\"pong\"", response, 7))
+        dier("wrong pong response from server");
+
+    free(response);
+
+    // setting up serial console
     if((fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0)
         diep(device);
 
     set_interface_attribs(fd, B9600);
 
+    // starting a new session
+    if(!(response = http("/api/push/session")))
+        dier("cannot create new session");
+
     while(1) {
         readfd(fd, buffer, sizeof(buffer));
+
+        // skip invalid header
+        if(buffer[0] != '$')
+            continue;
+
+        // saving to local logs
+        logs_append(logsfd, buffer);
+
+        // sending over the network
+        sprintf(request, "/api/push/data/%s", buffer);
+        if(!(response = http(request)))
+            printf("[-] cannot send datapoint\n");
     }
 
     return 0;
