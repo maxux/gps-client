@@ -37,6 +37,54 @@
 #include <sys/time.h>
 
 //
+// bundle stuff
+//
+typedef struct bundle_t {
+    int count;
+    size_t maxsize;
+    char *writer;
+    char *buffer;
+
+} bundle_t;
+
+// reset bundle pointer and size
+void bundle_reset(bundle_t *bundle) {
+    bundle->count = 0;
+    bundle->writer = bundle->buffer;
+}
+
+size_t bundle_length(bundle_t *bundle) {
+    return bundle->writer - bundle->buffer;
+}
+
+// initialize empty bundle
+void bundle_init(bundle_t *bundle) {
+    bundle->maxsize = 8192;
+    bundle->buffer = (char *) malloc(sizeof(char) * bundle->maxsize);
+    bundle_reset(bundle);
+}
+
+// append a line to the bundle
+int bundle_append(bundle_t *bundle, char *line) {
+    size_t curlen = bundle_length(bundle);
+    size_t linelen = strlen(line);
+
+    if(curlen + linelen + 1 > bundle->maxsize) {
+        printf("[-] bundle overflow, skipping\n");
+        return -1;
+    }
+
+    // append the line to the buffer
+    sprintf(bundle->writer, "%s\n", line);
+
+    // updating pointer
+    bundle->writer += linelen + 1;
+    bundle->count += 1;
+
+    return bundle->count;
+}
+
+//
 // error handling
 //
 void diep(char *str) {
@@ -86,18 +134,12 @@ char *readfd(int fd, char *buffer, size_t length) {
     int res, saved = 0;
     fd_set readfs;
     int selval;
-    // struct timeval tv, *ptv;
     char *temp;
 
     FD_ZERO(&readfs);
 
     while(1) {
         FD_SET(fd, &readfs);
-
-        // tv.tv_sec  = 2;
-        // tv.tv_usec = 0;
-
-        // ptv = NULL; // ptv = &tv;
 
         if((selval = select(fd + 1, &readfs, NULL, NULL, NULL)) < 0)
             diep("select");
@@ -121,9 +163,6 @@ char *readfd(int fd, char *buffer, size_t length) {
 
             if(!*buffer)
                 continue;
-
-            printf("[+] >> %s\n", buffer);
-            fflush(stdout);
         }
 
         return buffer;
@@ -163,12 +202,16 @@ int net_connect(char *host, int port) {
 //
 char *http(char *endpoint) {
     char *server = "home.maxux.net";
+    // char *server = "10.241.0.18";
     int port = 5555;
 
     char header[2048];
     char buffer[256];
     int sockfd;
     int length;
+
+    printf("[+] pushing data...\n");
+    fflush(stdout);
 
     sprintf(header, "GET %s\r\n\r\n", endpoint);
 
@@ -183,20 +226,63 @@ char *http(char *endpoint) {
     if((length = recv(sockfd, buffer, sizeof(buffer), 0)) < 0)
         perror("[-] read");
 
+    close(sockfd);
+
     buffer[length] = '\0';
-    printf("[+] buffer: %s\n", buffer);
+
+    printf("[+] response: %s\n", buffer);
+    fflush(stdout);
 
     return strdup(buffer);
+}
+
+char *post(char *endpoint, bundle_t *bundle) {
+    char *server = "home.maxux.net";
+    // char *server = "10.241.0.18";
+    int port = 5555;
+
+    char frame[8192];
+    int sockfd;
+    int length;
+
+    printf("[+] pushing data...\n");
+
+    char *header = "POST %s HTTP/1.0\r\n"
+                   "Content-Length: %lu\r\n"
+                   "\r\n%s";
+
+                   //      url       content-length         body
+    sprintf(frame, header, endpoint, bundle_length(bundle), bundle->buffer);
+
+    if((sockfd = net_connect(server, port)) < 0)
+        return NULL;
+
+    if(send(sockfd, frame, strlen(frame), 0) < 0) {
+        perror("[-] send");
+        return NULL;
+    }
+
+    if((length = recv(sockfd, frame, sizeof(frame), 0)) < 0)
+        perror("[-] read");
+
+    close(sockfd);
+
+    frame[length] = '\0';
+
+    printf("[+] response: %s\n", frame);
+
+    return strdup(frame);
 }
 
 //
 // local logs
 //
 int logs_create() {
-    int fd;
     char filename[256];
+    int fd;
 
     sprintf(filename, "/mnt/backlog/gps-%lu", time(NULL));
+
     if((fd = open(filename, O_WRONLY | O_CREAT, 0644)) < 0)
         return errp(filename);
 
@@ -205,6 +291,9 @@ int logs_create() {
 
 void logs_append(int fd, char *line) {
     if(write(fd, line, strlen(line)) < 0)
+        perror("[-] logs write");
+
+    if(write(fd, "\n", 1) < 0)
         perror("[-] logs write");
 }
 
@@ -216,10 +305,15 @@ int main(void) {
     char *device = "/dev/ttyAMA0";
     char buffer[2048];
     char *response = NULL;
-    char request[1024];
+    bundle_t bundle;
 
-    if((logsfd = logs_create() < 0))
+    // local logs
+    printf("[+] opening local log file\n");
+    if((logsfd = logs_create()) < 0)
         diep("[-] logs");
+
+    // bundle buffer
+    bundle_init(&bundle);
 
     // connecting to the network
     while(!(response = http("/api/ping"))) {
@@ -243,7 +337,10 @@ int main(void) {
         dier("cannot create new session");
 
     while(1) {
+        printf("[+] waiting serial data\n");
         readfd(fd, buffer, sizeof(buffer));
+
+        printf("[+] >> %s\n", buffer);
 
         // skip invalid header
         if(buffer[0] != '$')
@@ -252,10 +349,21 @@ int main(void) {
         // saving to local logs
         logs_append(logsfd, buffer);
 
-        // sending over the network
-        sprintf(request, "/api/push/data/%s", buffer);
-        if(!(response = http(request)))
-            printf("[-] cannot send datapoint\n");
+        // bundle the line
+        if(bundle_append(&bundle, buffer) < 0) {
+            // should not happen
+            bundle_reset(&bundle);
+            continue;
+        }
+
+        // sending when RMC frame is received
+        if(!strncmp(buffer, "$GPRMC", 6)) {
+            // sending bundle over the network
+            if(!(response = post("/api/push/datapoint", &bundle)))
+                printf("[-] cannot send datapoint\n");
+
+            bundle_reset(&bundle);
+        }
     }
 
     return 0;
