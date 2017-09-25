@@ -29,6 +29,8 @@ That's all. Server will receive plain raw-line from module directly, without pre
 
 This was tested with `glibc` and `gcc`, no more dependencies are needed.
 
+Mostly everything is hard-coded rigth now (server, port, serial, etc.), this will change soon.
+
 # Compilation
 
 A simple `make` in the directory will produce `gps-client` binary.
