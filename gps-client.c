@@ -20,21 +20,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 #include <unistd.h>
 #include <time.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <netdb.h>
 #include <fcntl.h>
 #include <termios.h>
-#include <inttypes.h>
 #include <errno.h>
-#include <sys/select.h>
-#include <sys/time.h>
 
 //
 // bundle stuff
@@ -53,6 +44,7 @@ void bundle_reset(bundle_t *bundle) {
     bundle->writer = bundle->buffer;
 }
 
+// return current bundle content-size in bytes
 size_t bundle_length(bundle_t *bundle) {
     return bundle->writer - bundle->buffer;
 }
@@ -87,17 +79,17 @@ int bundle_append(bundle_t *bundle, char *line) {
 //
 // error handling
 //
-void diep(char *str) {
+static void diep(char *str) {
     fprintf(stderr, "[-] %s: [%d] %s\n", str, errno, strerror(errno));
     exit(EXIT_FAILURE);
 }
 
-void dier(char *str) {
+static void dier(char *str) {
     fprintf(stderr, "[-] %s\n", str);
     exit(EXIT_FAILURE);
 }
 
-int errp(char *str) {
+static int errp(char *str) {
     perror(str);
     return -1;
 }
@@ -105,7 +97,7 @@ int errp(char *str) {
 //
 // device setter
 //
-int set_interface_attribs(int fd, int speed) {
+static int configurefd(int fd, int speed) {
     struct termios tty;
 
     memset(&tty, 0, sizeof(tty));
@@ -330,7 +322,7 @@ int main(void) {
     if((fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0)
         diep(device);
 
-    set_interface_attribs(fd, B9600);
+    configurefd(fd, B9600);
 
     // starting a new session
     if(!(response = http("/api/push/session")))
