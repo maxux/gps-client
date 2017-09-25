@@ -1,8 +1,5 @@
 EXEC = gps-client
 
-# flags
-CFLAGS  = -W -Wall -O2 -pipe -ansi -std=gnu99 -pthread -g
+CFLAGS  = -W -Wall -O2 -pipe -ansi -std=gnu99
 LDFLAGS =
-
-# CC = cc
 
