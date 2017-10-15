@@ -272,6 +272,52 @@ static void validate(settings_t *settings, char *endpoint) {
 //
 // local logs
 //
+static int logs_index_get(char *indexfile) {
+    FILE *fp;
+    char buffer[32];
+
+    if(!(fp = fopen(indexfile, "r")))
+        return 0;
+
+    if(!fread(buffer, sizeof(buffer), 1, fp))
+        diep(indexfile);
+
+    fclose(fp);
+
+    return atoi(buffer);
+}
+
+static int logs_index_set(char *indexfile, int value) {
+    FILE *fp;
+    char buffer[32];
+
+    sprintf(buffer, "%d", value);
+
+    if(!(fp = fopen(indexfile, "w")))
+        return 0;
+
+    if(!fwrite(buffer, sizeof(buffer), 1, fp))
+        diep(indexfile);
+
+    fclose(fp);
+
+    return value;
+}
+
+static int logs_index(char *storage) {
+    char filename[256];
+    int index;
+
+    // set index filename
+    sprintf(filename, "%s/index", storage);
+
+    // loads index and increment it
+    index = logs_index_get(filename);
+    logs_index_set(filename, index + 1);
+
+    return index;
+}
+
 static int logs_create(char *filename) {
     int fd;
 
@@ -373,7 +419,8 @@ int main(int argc, char *argv[]) {
     // FIXME: argument parser
     //
     char filename[256];
-    sprintf(filename, "/mnt/backlog/gps-%lu", time(NULL));
+    int logindex = logs_index("/mnt/backlog");
+    sprintf(filename, "/mnt/backlog/gps-%d", logindex);
 
     settings.server = "gps.maxux.net";
     settings.logfile = filename;
