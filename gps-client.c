@@ -27,6 +27,8 @@
 #include <termios.h>
 #include <errno.h>
 
+#define FRAME_SIZE 8192
+
 //
 // settings
 //
@@ -209,7 +211,7 @@ static int net_connect(char *host, int port) {
 // network request
 //
 static char *post(settings_t *settings, char *endpoint, bundle_t *bundle) {
-    char frame[8192];
+    char *frame;
     int sockfd;
     int length;
 
@@ -221,6 +223,14 @@ static char *post(settings_t *settings, char *endpoint, bundle_t *bundle) {
                    "Host: %s\r\n"
                    "\r\n%s";
 
+    if((sockfd = net_connect(settings->server, settings->port)) < 0)
+        return NULL;
+
+    if(!(frame = malloc(sizeof(char) * (bundle_length(bundle) + 2048)))) {
+        perror("[-] malloc");
+        return NULL;
+    }
+
     sprintf(
         frame, header,
         endpoint,
@@ -230,15 +240,19 @@ static char *post(settings_t *settings, char *endpoint, bundle_t *bundle) {
         bundle->buffer
     );
 
-    if((sockfd = net_connect(settings->server, settings->port)) < 0)
-        return NULL;
-
     if(send(sockfd, frame, strlen(frame), 0) < 0) {
         perror("[-] send");
+        free(frame);
         return NULL;
     }
 
-    if((length = recv(sockfd, frame, sizeof(frame), 0)) < 0)
+    free(frame);
+    if(!(frame = malloc(sizeof(char) * FRAME_SIZE))) {
+        perror("[-] malloc");
+        return NULL;
+    }
+
+    if((length = recv(sockfd, frame, FRAME_SIZE, 0)) < 0)
         perror("[-] read");
 
     frame[length] = '\0';
@@ -246,7 +260,7 @@ static char *post(settings_t *settings, char *endpoint, bundle_t *bundle) {
 
     printf("[+] response: %s\n", frame);
 
-    return strdup(frame);
+    return frame;
 }
 
 // send a post request and wait for a HTTP 200 response
