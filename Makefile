@@ -1,18 +1,12 @@
-include config.mk
+CFLAGS  = -W -Wall -O2 -pipe -ansi -std=gnu99
+LDFLAGS =
 
-SRC=$(wildcard *.c)
-OBJ=$(SRC:.c=.o)
+all: gps-gateway gps-push
 
-all: options $(EXEC)
-
-options: config.mk
-	@echo $(EXEC) build options:
-	@echo "CFLAGS   = $(CFLAGS)"
-	@echo "LDFLAGS  = $(LDFLAGS)"
-	@echo "CC       = $(CC)"
-
-$(EXEC): $(OBJ)
+gps-gateway: gps-gateway.o
 	$(CC) -o $@ $^ $(LDFLAGS)
+
+gps-push: gps-push.o
 
 %.o: %.c
 	$(CC) -o $@ -c $< $(CFLAGS)
@@ -21,5 +15,5 @@ clean:
 	rm -fv *.o
 
 mrproper: clean
-	rm -fv $(EXEC)
+	rm -fv gps-gateway gps-push
 
