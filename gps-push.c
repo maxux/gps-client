@@ -39,6 +39,7 @@ typedef struct settings_t {
     int port;         // remote server port
     char *password;   // http request password
     char *logfile;    // raw local log filename
+    char *pusher;     // push pipe file
 
 } settings_t;
 
@@ -110,34 +111,6 @@ static int errp(char *str) {
 }
 
 //
-// device setter
-//
-static int serialfd(char *device, int bauds) {
-    struct termios tty;
-    int fd;
-
-    if((fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0)
-        diep(device);
-
-    memset(&tty, 0, sizeof(tty));
-
-    if(tcgetattr(fd, &tty) != 0)
-        diep("tcgetattr");
-
-    tty.c_cflag = bauds | CRTSCTS | CS8 | CLOCAL | CREAD;
-    tty.c_iflag = IGNPAR | ICRNL;
-    tty.c_lflag = ICANON;
-    tty.c_oflag = 0;
-    tty.c_cc[VMIN]  = 1;
-    tty.c_cc[VTIME] = 0;
-
-    if(tcsetattr(fd, TCSANOW, &tty) != 0)
-        diep("tcgetattr");
-
-    return fd;
-}
-
-//
 // device io
 //
 static char *readfd(int fd, char *buffer, size_t length) {
@@ -183,28 +156,28 @@ static char *readfd(int fd, char *buffer, size_t length) {
 // network io
 //
 static int net_connect(char *host, int port) {
-	int sockfd;
-	struct sockaddr_in addr_remote;
-	struct hostent *hent;
+    int sockfd;
+    struct sockaddr_in addr_remote;
+    struct hostent *hent;
 
-	/* create client socket */
-	addr_remote.sin_family = AF_INET;
-	addr_remote.sin_port = htons(port);
+    /* create client socket */
+    addr_remote.sin_family = AF_INET;
+    addr_remote.sin_port = htons(port);
 
-	/* dns resolution */
-	if((hent = gethostbyname(host)) == NULL)
-		return errp("gethostbyname");
+    /* dns resolution */
+    if((hent = gethostbyname(host)) == NULL)
+        return errp("gethostbyname");
 
-	memcpy(&addr_remote.sin_addr, hent->h_addr_list[0], hent->h_length);
+    memcpy(&addr_remote.sin_addr, hent->h_addr_list[0], hent->h_length);
 
-	if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-		return errp("socket");
+    if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+        return errp("socket");
 
-	/* connecting */
-	if(connect(sockfd, (const struct sockaddr *) &addr_remote, sizeof(addr_remote)) < 0)
-		return errp("connect");
+    /* connecting */
+    if(connect(sockfd, (const struct sockaddr *) &addr_remote, sizeof(addr_remote)) < 0)
+        return errp("connect");
 
-	return sockfd;
+    return sockfd;
 }
 
 //
@@ -284,76 +257,10 @@ static void validate(settings_t *settings, char *endpoint) {
 }
 
 //
-// local logs
-//
-static int logs_index_get(char *indexfile) {
-    FILE *fp;
-    char buffer[32];
-
-    if(!(fp = fopen(indexfile, "r")))
-        return 0;
-
-    if(!fread(buffer, sizeof(buffer), 1, fp))
-        diep(indexfile);
-
-    fclose(fp);
-
-    return atoi(buffer);
-}
-
-static int logs_index_set(char *indexfile, int value) {
-    FILE *fp;
-    char buffer[32];
-
-    sprintf(buffer, "%d", value);
-
-    if(!(fp = fopen(indexfile, "w")))
-        return 0;
-
-    if(!fwrite(buffer, sizeof(buffer), 1, fp))
-        diep(indexfile);
-
-    fclose(fp);
-
-    return value;
-}
-
-static int logs_index(char *storage) {
-    char filename[256];
-    int index;
-
-    // set index filename
-    sprintf(filename, "%s/index", storage);
-
-    // loads index and increment it
-    index = logs_index_get(filename);
-    logs_index_set(filename, index + 1);
-
-    return index;
-}
-
-static int logs_create(char *filename) {
-    int fd;
-
-    if((fd = open(filename, O_WRONLY | O_CREAT, 0644)) < 0)
-        diep(filename);
-
-    return fd;
-}
-
-static void logs_append(int fd, char *line) {
-    if(write(fd, line, strlen(line)) < 0)
-        perror("[-] logs write");
-
-    if(write(fd, "\n", 1) < 0)
-        perror("[-] logs write");
-}
-
-//
 // main worker
 //
-static int gpsclient(settings_t *settings) {
-    int fd, logsfd;
+static int gpspush(settings_t *settings) {
+    int fd;
     char buffer[2048];
     char *response = NULL;
     bundle_t bundle;
@@ -361,19 +268,13 @@ static int gpsclient(settings_t *settings) {
     // empty bundle buffer
     bundle_init(&bundle);
 
-    // local logs
-    if(settings->logfile) {
-        printf("[+] opening local log file\n");
-        logsfd = logs_create(settings->logfile);
-    }
+    // opening gps-gateway
+    if((fd = open(settings->pusher, O_RDONLY)) < 0)
+        diep(settings->pusher);
 
     // connecting to the network
     printf("[+] validating remote server\n");
     validate(settings, "/api/ping");
-
-    // setting up serial console
-    printf("[+] opening serial device: %s\n", settings->device);
-    fd = serialfd(settings->device, settings->bauds);
 
     // starting a new session
     printf("[+] requesting server new-session\n");
@@ -388,10 +289,6 @@ static int gpsclient(settings_t *settings) {
         // skip invalid header
         if(buffer[0] != '$')
             continue;
-
-        // saving to local logs
-        if(settings->logfile)
-            logs_append(logsfd, buffer);
 
         // bundle the line
         if(bundle_append(&bundle, buffer) < 0) {
@@ -421,7 +318,8 @@ int main(int argc, char *argv[]) {
         .server = NULL,
         .port = 80,
         .password = "",
-        .logfile = NULL
+        .logfile = NULL,
+        .pusher = "/tmp/gps.pipe",
     };
 
     if(argc < 2) {
@@ -429,16 +327,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    //
-    // FIXME: argument parser
-    //
-    char filename[256];
-    int logindex = logs_index("/mnt/backlog");
-    sprintf(filename, "/mnt/backlog/gps-%d", logindex);
-
     settings.server = "gps.maxux.net";
-    settings.logfile = filename;
     settings.password = argv[1];
 
-    return gpsclient(&settings);
+    return gpspush(&settings);
 }
